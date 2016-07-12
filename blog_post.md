@@ -147,7 +147,7 @@ if instance.state['Code'] is 16:
 
 
 #### 2.Take snapshot
-You can access the volumes of the instances. These returns a Boto3 'Collection' which is an iterable of resources. We can iterate through it to get access to the actual instance of the volume. Note, if the volume is encrypted, we will exit our script.
+You can access the volumes of the instances. These return a Boto3 'Collection' which is an iterable of resources. We can iterate through it to get access to the actual instance of the volume. Note, if the volume is encrypted, we will exit our script.
 
 ```python
 for v in instance.volumes.all():
