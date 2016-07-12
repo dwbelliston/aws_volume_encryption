@@ -174,7 +174,7 @@ waiter_snapshot_complete.wait(
 ```
 
 #### 3.Create new encrypted volume
-To create the encrypted volumes we can simply create a copy of the snapshot of the unencrypted volume and set the 'Encrypted' flag to true. In addition to the encrypted flag, we can set other parameters for this action. If the user passed their customer master key, meaning they dont want to use the Amazons default key managment system, we will use that specific key for the encryption. Again, once the snapshot begins to be copied, we will wait for the snapshot to be complete be proceeding.
+To create the encrypted volumes we can simply create a copy of the snapshot of the unencrypted volume and set the 'Encrypted' flag to true. In addition to the encrypted flag, we can set other parameters for this action. If the user passed their customer master key, meaning they dont want to use the Amazons default key managment system, we will use that specific key for the encryption. Again, once the snapshot begins to be copied, we will wait for the snapshot to be complete before proceeding.
 
 ```python
 print('---Create Encrypted Snapshot Copy')
