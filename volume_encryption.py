@@ -47,17 +47,20 @@ def main(argv):
     customer_master_key = args.customer_master_key
 
     ###### Steps:
+    # Check if root volume is encrypted, bail if yes
+    volumes = [v for v in instance.volumes.all()]
+    volume_id = volumes[0].id
+    volume_encrypted = volumes[0].encrypted
+    if volume_encrypted:
+        print('**Volume ' + volume_id + ' is already encrypted')
+        sys.exit(1)
+    print('**Encrypting volume ' + volume_id + '...')
+
     # 1.Shut down if running
     if instance.state['Code'] is 16:
         instance.stop()
 
     # 2.Take snapshot
-    for v in instance.volumes.all():
-        volume_id = v.id
-        if v.encrypted:
-            print('**Volume already is encrypted')
-            sys.exit()
-
     print('---Create snapshot of volume {}'.format(volume_id))
     snapshot = ec2.create_snapshot(
         VolumeId=volume_id,
