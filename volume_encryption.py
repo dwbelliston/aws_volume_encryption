@@ -53,7 +53,7 @@ def main(argv):
     volume_encrypted = volumes[0].encrypted
     if volume_encrypted:
         print('**Volume ' + volume_id + ' is already encrypted')
-        sys.exit(1)
+        sys.exit(0)
     print('**Encrypting volume ' + volume_id + '...')
 
     # 1.Shut down if running
