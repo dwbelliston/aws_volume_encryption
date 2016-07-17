@@ -77,6 +77,9 @@ def main(argv):
 
     """ Step 1: Prepare instance """
     print('---Preparing instance')
+    # Save original mappings to persist to new volume
+    original_mappings = {}
+    original_mappings['DeleteOnTermination'] = instance.block_device_mappings[0]['Ebs']['DeleteOnTermination']
 
     # Exit if instance is pending, shutting-down, or terminated
     instance_exit_states = [0, 32, 48]
@@ -107,11 +110,16 @@ def main(argv):
         Description='Snapshot of volume {}'.format(original_root_volume.id),
     )
 
-    waiter_snapshot_complete.wait(
-        SnapshotIds=[
-            snapshot.id,
-        ]
-    )
+    try:
+        waiter_snapshot_complete.wait(
+            SnapshotIds=[
+                snapshot.id,
+            ]
+        )
+    except botocore.exceptions.WaiterError as e:
+        # TODO delete snapshot?
+        # snapshot.delete()
+        sys.exit('ERROR: {}'.format(e))
 
     """ Step 3: Create encrypted volume """
     print('---Create encrypted snapshot copy')
@@ -135,32 +143,23 @@ def main(argv):
 
     snapshot_encrypted = ec2.Snapshot(snapshot_encrypted_dict['SnapshotId'])
 
-    waiter_snapshot_complete.wait(
-        SnapshotIds=[
-            snapshot_encrypted.id,
-        ],
-    )
+    try:
+        waiter_snapshot_complete.wait(
+            SnapshotIds=[
+                snapshot_encrypted.id,
+            ],
+        )
+    except botocore.exceptions.WaiterError as e:
+        # TODO delete snapshot?
+        # snapshot.delete()
+        # snapshot_encrypted.delete()
+        sys.exit('ERROR: {}'.format(e))
 
     print('---Create encrypted volume from snapshot')
     volume_encrypted = ec2.create_volume(
         SnapshotId=snapshot_encrypted.id,
         AvailabilityZone=instance.placement['AvailabilityZone']
     )
-
-    # Modify attributes
-    # print(instance.block_device_mappings[0])
-    # instance.modify_attribute(
-    #     BlockDeviceMappings=[
-    #         {
-    #             'DeviceName': instance.block_device_mappings[0]['DeviceName'],
-    #             'Ebs': {
-    #                 'DeleteOnTermination':
-    #                     instance.block_device_mappings
-    #                     [0]['Ebs']['DeleteOnTermination'],
-    #             },
-    #         },
-    #     ],
-    # )
 
     """ Step 4: Detach current root volume """
     print('---Deatch volume {}'.format(original_root_volume.id))
@@ -171,11 +170,19 @@ def main(argv):
 
     """ Step 5: Attach current root volume """
     print('---Attach volume {}'.format(volume_encrypted.id))
-    waiter_volume_available.wait(
-        VolumeIds=[
-            volume_encrypted.id,
-        ],
-    )
+
+    try:
+        waiter_volume_available.wait(
+            VolumeIds=[
+                volume_encrypted.id,
+            ],
+        )
+    except botocore.exceptions.WaiterError as e:
+        # TODO Cleanup?
+        # snapshot.delete()
+        # snapshot_encrypted.delete()
+        # volume_encrypted.delete()
+        sys.exit('ERROR: {}'.format(e))
 
     instance.attach_volume(
         VolumeId=volume_encrypted.id,
@@ -183,6 +190,18 @@ def main(argv):
     )
 
     """ Step 6: Restart instance """
+    # Modify instance attributes
+    instance.modify_attribute(
+        BlockDeviceMappings=[
+            {
+                'DeviceName': instance.root_device_name,
+                'Ebs': {
+                    'DeleteOnTermination':
+                    original_mappings['DeleteOnTermination'],
+                },
+            },
+        ],
+    )
     print('---Restart instance')
     instance.start()
 
