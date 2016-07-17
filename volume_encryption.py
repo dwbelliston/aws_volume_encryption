@@ -51,7 +51,7 @@ def main(argv):
 
     """ Check instance exists """
     instance_id = args.instance
-    print('---Checking instance {}'.format(instance_id))
+    print('---Checking instance ({})'.format(instance_id))
     instance = ec2.Instance(instance_id)
 
     # Set the max_attempts for this waiter (default 40)
@@ -68,10 +68,12 @@ def main(argv):
     """ Get volume and exit if already encrypted """
     volumes = [v for v in instance.volumes.all()]
     if volumes:
-        volume_id = volumes[0].id
-        volume_encrypted = volumes[0].encrypted
+        original_root_volume = ec2.Volume(volumes[0].id)
+        volume_encrypted = original_root_volume.encrypted
         if volume_encrypted:
-            sys.exit('**Volume ({}) is already encrypted'.format(volume_id))
+            sys.exit(
+                '**Volume ({}) is already encrypted'
+                .format(original_root_volume.id))
 
     """ Step 1: Prepare instance """
     print('---Preparing instance')
@@ -99,10 +101,10 @@ def main(argv):
         sys.exit('ERROR: {}'.format(e))
 
     """ Step 2: Take snapshot of volume """
-    print('---Create snapshot of volume ({})'.format(volume_id))
+    print('---Create snapshot of volume ({})'.format(original_root_volume.id))
     snapshot = ec2.create_snapshot(
-        VolumeId=volume_id,
-        Description='Snapshot of volume {}'.format(volume_id),
+        VolumeId=original_root_volume.id,
+        Description='Snapshot of volume {}'.format(original_root_volume.id),
     )
 
     waiter_snapshot_complete.wait(
@@ -115,38 +117,55 @@ def main(argv):
     print('---Create encrypted snapshot copy')
     if customer_master_key:
         # Use custom key
-        snapshot_encrypted = snapshot.copy(
+        snapshot_encrypted_dict = snapshot.copy(
             SourceRegion=session.region_name,
-            Description='Encrypted copy of snapshot {}'
+            Description='Encrypted copy of snapshot #{}'
                         .format(snapshot.id),
             KmsKeyId=customer_master_key,
             Encrypted=True,
         )
     else:
         # Use default key
-        snapshot_encrypted = snapshot.copy(
+        snapshot_encrypted_dict = snapshot.copy(
             SourceRegion=session.region_name,
-            Description='Encrypted copy of snapshot {}'
+            Description='Encrypted copy of snapshot #{}'
                         .format(snapshot.id),
             Encrypted=True,
         )
 
+    snapshot_encrypted = ec2.Snapshot(snapshot_encrypted_dict['SnapshotId'])
+
     waiter_snapshot_complete.wait(
         SnapshotIds=[
-            snapshot_encrypted['SnapshotId'],
+            snapshot_encrypted.id,
         ],
     )
 
     print('---Create encrypted volume from snapshot')
     volume_encrypted = ec2.create_volume(
-        SnapshotId=snapshot_encrypted['SnapshotId'],
+        SnapshotId=snapshot_encrypted.id,
         AvailabilityZone=instance.placement['AvailabilityZone']
     )
 
+    # Modify attributes
+    # print(instance.block_device_mappings[0])
+    # instance.modify_attribute(
+    #     BlockDeviceMappings=[
+    #         {
+    #             'DeviceName': instance.block_device_mappings[0]['DeviceName'],
+    #             'Ebs': {
+    #                 'DeleteOnTermination':
+    #                     instance.block_device_mappings
+    #                     [0]['Ebs']['DeleteOnTermination'],
+    #             },
+    #         },
+    #     ],
+    # )
+
     """ Step 4: Detach current root volume """
-    print('---Deatch volume {}'.format(volume_id))
+    print('---Deatch volume {}'.format(original_root_volume.id))
     instance.detach_volume(
-        VolumeId=volume_id,
+        VolumeId=original_root_volume.id,
         Device=instance.root_device_name,
     )
 
@@ -180,12 +199,12 @@ def main(argv):
 
     """ Step 7: Clean up """
     print('---Clean up resources')
-    # Delete snapshot and original volume
-    snapshot_encrypted.delete()
+    # Delete snapshots and original volume
     snapshot.delete()
-    volumes[0].delete()
+    snapshot_encrypted.delete()
+    original_root_volume.delete()
 
-    print('Fin')
+    print('Encryption finished')
 
 if __name__ == "__main__":
     main(sys.argv[1:])
