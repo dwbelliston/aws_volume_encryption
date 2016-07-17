@@ -1,27 +1,34 @@
 #! /Users/dwbelliston/.virtualenvs/aws_ebs/bin/python
 
-#Overview:
-#    Take unencrypted root volume and encrypt it for EC2.
-#Params:
-#    ID for EC2 instance
-#    Customer Master Key (CMK) (optional)
-#Conditions:
-#    Return if volume already encrypted
-#    Use named profiles from credentials file
+"""
+Overview:
+    Take unencrypted root volume and encrypt it for EC2.
+Params:
+    ID for EC2 instance
+    Customer Master Key (CMK) (optional)
+    Profile to use
+Conditions:
+    Return if volume already encrypted
+    Use named profiles from credentials file
+"""
 
 import sys
 import boto3
 import botocore
 import argparse
 
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Encrypts EC2 root volume.')
-    parser.add_argument('-i', '--instance', help='Instance to encrypt volume on.',required=True)
-    parser.add_argument('-key','--customer_master_key',help='Customer master key', required=False)
-    parser.add_argument('-p','--profile',help='Profile to use', required=False)
+    parser.add_argument('-i', '--instance',
+                        help='Instance to encrypt volume on.', required=True)
+    parser.add_argument('-key', '--customer_master_key',
+                        help='Customer master key', required=False)
+    parser.add_argument('-p', '--profile',
+                        help='Profile to use', required=False)
     args = parser.parse_args()
 
-    # Set up AWS Session + Client + Resources + Waiters
+    """ Set up AWS Session + Client + Resources + Waiters """
     if args.profile:
         # Create custom session
         print('Using Profile {}'.format(args.profile))
@@ -30,21 +37,24 @@ def main(argv):
         # Use default session
         session = boto3.session.Session()
 
+    # Get CMK
+    customer_master_key = args.customer_master_key
+
     client = session.client('ec2')
     ec2 = session.resource('ec2')
 
     waiter_instance_exists = client.get_waiter('instance_exists')
+    waiter_instance_stopped = client.get_waiter('instance_stopped')
     waiter_snapshot_complete = client.get_waiter('snapshot_completed')
     waiter_volume_available = client.get_waiter('volume_available')
 
-    # Get Instance
+    """ Check Instance Exists """
     instance_id = args.instance
     print('---Instance {}'.format(instance_id))
     instance = ec2.Instance(instance_id)
 
     # Set the max_attempts for this waiter (default 40)
     waiter_instance_exists.config.max_attempts = 1
-
     try:
         waiter_instance_exists.wait(
             InstanceIds=[
@@ -54,23 +64,38 @@ def main(argv):
     except botocore.exceptions.WaiterError as e:
         sys.exit('ERROR: {}'.format(e))
 
-
-    # Get CMK
-    customer_master_key = args.customer_master_key
-
-    ###### Steps:
-    # Check if root volume is encrypted, bail if yes
+    """ Get volume and exit if already encrypted """
     volumes = [v for v in instance.volumes.all()]
-    volume_id = volumes[0].id
-    volume_encrypted = volumes[0].encrypted
-    if volume_encrypted:
-        print('**Volume ' + volume_id + ' is already encrypted')
-        sys.exit(0)
-    print('**Encrypting volume ' + volume_id + '...')
+    if volumes:
+        volume_id = volumes[0].id
+        volume_encrypted = volumes[0].encrypted
+        if volume_encrypted:
+            sys.exit('**Volume ({}) is already encrypted'.format(volume_id))
 
-    # 1.Shut down if running
+    """ Step 1: Prepare instance """
+    print('**Preparing instance...')
+
+    # Exit if instance is pending, shutting-down, or terminated
+    instance_exit_states = [0, 32, 48]
+    if instance.state['Code'] in instance_exit_states:
+        sys.exit(
+            'ERROR: Instance is {} please make sure this instance is active'
+            .format(instance.state['Name'])
+        )
+
+    # Validate successful shutdown if it is running or stopping
     if instance.state['Code'] is 16:
         instance.stop()
+    # Set the max_attempts for this waiter (default 40)
+    waiter_instance_stopped.config.max_attempts = 2
+    try:
+        waiter_instance_stopped.wait(
+            InstanceIds=[
+                instance_id,
+            ]
+        )
+    except botocore.exceptions.WaiterError as e:
+        sys.exit('ERROR: {}'.format(e))
 
     # 2.Take snapshot
     print('---Create snapshot of volume {}'.format(volume_id))
@@ -146,4 +171,4 @@ def main(argv):
     print('Fin')
 
 if __name__ == "__main__":
-   main(sys.argv[1:])
+    main(sys.argv[1:])
