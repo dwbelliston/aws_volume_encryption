@@ -31,7 +31,7 @@ def main(argv):
     """ Set up AWS Session + Client + Resources + Waiters """
     if args.profile:
         # Create custom session
-        print('Using Profile {}'.format(args.profile))
+        print('Using profile {}'.format(args.profile))
         session = boto3.session.Session(profile_name=args.profile)
     else:
         # Use default session
@@ -45,16 +45,17 @@ def main(argv):
 
     waiter_instance_exists = client.get_waiter('instance_exists')
     waiter_instance_stopped = client.get_waiter('instance_stopped')
+    waiter_instance_running = client.get_waiter('instance_running')
     waiter_snapshot_complete = client.get_waiter('snapshot_completed')
     waiter_volume_available = client.get_waiter('volume_available')
 
-    """ Check Instance Exists """
+    """ Check instance exists """
     instance_id = args.instance
-    print('---Instance {}'.format(instance_id))
+    print('---Checking instance {}'.format(instance_id))
     instance = ec2.Instance(instance_id)
 
     # Set the max_attempts for this waiter (default 40)
-    waiter_instance_exists.config.max_attempts = 1
+    waiter_instance_exists.config.max_attempts = 5
     try:
         waiter_instance_exists.wait(
             InstanceIds=[
@@ -73,13 +74,13 @@ def main(argv):
             sys.exit('**Volume ({}) is already encrypted'.format(volume_id))
 
     """ Step 1: Prepare instance """
-    print('**Preparing instance...')
+    print('---Preparing instance')
 
     # Exit if instance is pending, shutting-down, or terminated
     instance_exit_states = [0, 32, 48]
     if instance.state['Code'] in instance_exit_states:
         sys.exit(
-            'ERROR: Instance is {} please make sure this instance is active'
+            'ERROR: Instance is {} please make sure this instance is active.'
             .format(instance.state['Name'])
         )
 
@@ -87,7 +88,7 @@ def main(argv):
     if instance.state['Code'] is 16:
         instance.stop()
     # Set the max_attempts for this waiter (default 40)
-    waiter_instance_stopped.config.max_attempts = 2
+    waiter_instance_stopped.config.max_attempts = 5
     try:
         waiter_instance_stopped.wait(
             InstanceIds=[
@@ -97,11 +98,11 @@ def main(argv):
     except botocore.exceptions.WaiterError as e:
         sys.exit('ERROR: {}'.format(e))
 
-    # 2.Take snapshot
-    print('---Create snapshot of volume {}'.format(volume_id))
+    """ Step 2: Take snapshot of volume """
+    print('---Create snapshot of volume ({})'.format(volume_id))
     snapshot = ec2.create_snapshot(
         VolumeId=volume_id,
-        Description='Snapshot of {}'.format(volume_id),
+        Description='Snapshot of volume {}'.format(volume_id),
     )
 
     waiter_snapshot_complete.wait(
@@ -110,13 +111,14 @@ def main(argv):
         ]
     )
 
-    # 3.Create new encrypted volume(same size)
-    print('---Create Encrypted Snapshot Copy')
+    """ Step 3: Create encrypted volume """
+    print('---Create encrypted snapshot copy')
     if customer_master_key:
         # Use custom key
         snapshot_encrypted = snapshot.copy(
             SourceRegion=session.region_name,
-            Description='Encrypted Copied Snapshot of {}'.format(snapshot.id),
+            Description='Encrypted copy of snapshot {}'
+                        .format(snapshot.id),
             KmsKeyId=customer_master_key,
             Encrypted=True,
         )
@@ -124,7 +126,8 @@ def main(argv):
         # Use default key
         snapshot_encrypted = snapshot.copy(
             SourceRegion=session.region_name,
-            Description='Encrypted Copied Snapshot of {}'.format(snapshot.id),
+            Description='Encrypted copy of snapshot {}'
+                        .format(snapshot.id),
             Encrypted=True,
         )
 
@@ -134,21 +137,21 @@ def main(argv):
         ],
     )
 
-    print('---Create Encrypted Volume from snapshot')
+    print('---Create encrypted volume from snapshot')
     volume_encrypted = ec2.create_volume(
         SnapshotId=snapshot_encrypted['SnapshotId'],
         AvailabilityZone=instance.placement['AvailabilityZone']
     )
 
-    # 4.Detach current root volume
-    print('---Deatch Volume {}'.format(volume_id))
+    """ Step 4: Detach current root volume """
+    print('---Deatch volume {}'.format(volume_id))
     instance.detach_volume(
         VolumeId=volume_id,
         Device=instance.root_device_name,
     )
 
-    # 5.Attach new volume
-    print('---Attach Volume {}'.format(volume_encrypted.id))
+    """ Step 5: Attach current root volume """
+    print('---Attach volume {}'.format(volume_encrypted.id))
     waiter_volume_available.wait(
         VolumeIds=[
             volume_encrypted.id,
@@ -160,13 +163,27 @@ def main(argv):
         Device=instance.root_device_name
     )
 
-    # 6.Restart instance
-    print('---Restart Instance')
-    if instance.state['Code'] is 80 or instance.state['Code'] is 64:
-        instance.start()
+    """ Step 6: Restart instance """
+    print('---Restart instance')
+    instance.start()
 
-    # Clean up
+    # Set the max_attempts for this waiter (default 40)
+    waiter_instance_running.config.max_attempts = 40
+    try:
+        waiter_instance_running.wait(
+            InstanceIds=[
+                instance_id,
+            ]
+        )
+    except botocore.exceptions.WaiterError as e:
+        sys.exit('ERROR: {}'.format(e))
+
+    """ Step 7: Clean up """
+    print('---Clean up resources')
+    # Delete snapshot and original volume
+    snapshot_encrypted.delete()
     snapshot.delete()
+    volumes[0].delete()
 
     print('Fin')
 
