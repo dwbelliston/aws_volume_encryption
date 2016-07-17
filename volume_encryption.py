@@ -1,4 +1,4 @@
-#! /usr/local/bin/python3
+#! /Users/dwbelliston/.virtualenvs/aws_ebs/bin/python
 
 #Overview:
 #    Take unencrypted root volume and encrypt it for EC2.
@@ -11,6 +11,7 @@
 
 import sys
 import boto3
+import botocore
 import argparse
 
 def main(argv):
@@ -20,7 +21,7 @@ def main(argv):
     parser.add_argument('-p','--profile',help='Profile to use', required=False)
     args = parser.parse_args()
 
-    # Set up AWS Client + Resources + Waiters
+    # Set up AWS Session + Client + Resources + Waiters
     if args.profile:
         # Create custom session
         print('Using Profile {}'.format(args.profile))
@@ -31,6 +32,8 @@ def main(argv):
 
     client = session.client('ec2')
     ec2 = session.resource('ec2')
+
+    waiter_instance_exists = client.get_waiter('instance_exists')
     waiter_snapshot_complete = client.get_waiter('snapshot_completed')
     waiter_volume_available = client.get_waiter('volume_available')
 
@@ -39,9 +42,18 @@ def main(argv):
     print('---Instance {}'.format(instance_id))
     instance = ec2.Instance(instance_id)
 
-    if not instance:
-        print('No instance found with ID {}'.format(instance_id))
-        sys.exit()
+    # Set the max_attempts for this waiter (default 40)
+    waiter_instance_exists.config.max_attempts = 1
+
+    try:
+        waiter_instance_exists.wait(
+            InstanceIds=[
+                instance_id,
+            ]
+        )
+    except botocore.exceptions.WaiterError as e:
+        sys.exit('ERROR: {}'.format(e))
+
 
     # Get CMK
     customer_master_key = args.customer_master_key
