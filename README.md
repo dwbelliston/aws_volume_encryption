@@ -60,6 +60,7 @@ authorization.
                 "ec2:CopySnapshot",
                 "ec2:CreateSnapshot",
                 "ec2:CreateVolume",
+                "ec2:DeleteVolume",
                 "ec2:DeleteSnapshot",
                 "ec2:AttachVolume",
                 "ec2:DetachVolume"
