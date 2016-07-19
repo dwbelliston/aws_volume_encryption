@@ -117,8 +117,7 @@ def main(argv):
             ]
         )
     except botocore.exceptions.WaiterError as e:
-        # TODO delete snapshot?
-        # snapshot.delete()
+        snapshot.delete()
         sys.exit('ERROR: {}'.format(e))
 
     """ Step 3: Create encrypted volume """
@@ -150,9 +149,8 @@ def main(argv):
             ],
         )
     except botocore.exceptions.WaiterError as e:
-        # TODO delete snapshot?
-        # snapshot.delete()
-        # snapshot_encrypted.delete()
+        snapshot.delete()
+        snapshot_encrypted.delete()
         sys.exit('ERROR: {}'.format(e))
 
     print('---Create encrypted volume from snapshot')
@@ -178,10 +176,9 @@ def main(argv):
             ],
         )
     except botocore.exceptions.WaiterError as e:
-        # TODO Cleanup?
-        # snapshot.delete()
-        # snapshot_encrypted.delete()
-        # volume_encrypted.delete()
+        snapshot.delete()
+        snapshot_encrypted.delete()
+        volume_encrypted.delete()
         sys.exit('ERROR: {}'.format(e))
 
     instance.attach_volume(
