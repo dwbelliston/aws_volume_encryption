@@ -79,15 +79,17 @@ receive.
 ```python
 #!/usr/bin/env python
 
-# Overview:
-#    Take unencrypted root volume and encrypt it for EC2.
-# Params:
-#    ID for EC2 instance
-#    Customer Master Key (CMK) (optional)
-#    Profile
-# Conditions:
-#    Return if volume already encrypted
-#    Use named profiles from credentials file
+"""
+Overview:
+    Take unencrypted root volume and encrypt it for EC2.
+Params:
+    ID for EC2 instance
+    Customer Master Key (CMK) (optional)
+    Profile to use
+Conditions:
+    Return if volume already encrypted
+    Use named profiles from credentials file
+"""
 ```
 
 This script will use the ID parameter to find the EC2 instance. If the root
@@ -102,13 +104,18 @@ Let's import what we need for the script and set up our argument parser.
 ```python
 import sys
 import boto3
+import botocore
 import argparse
+
 
 def main(argv):
     parser = argparse.ArgumentParser(description='Encrypts EC2 root volume.')
-    parser.add_argument('-i', '--instance', help='Instance to encrypt volume on.',required=True)
-    parser.add_argument('-key','--customer_master_key',help='Customer master key', required=False)
-    parser.add_argument('-p','--profile',help='Profile to use', required=False)
+    parser.add_argument('-i', '--instance',
+                        help='Instance to encrypt volume on.', required=True)
+    parser.add_argument('-key', '--customer_master_key',
+                        help='Customer master key', required=False)
+    parser.add_argument('-p', '--profile',
+                        help='Profile to use', required=False)
     args = parser.parse_args()
 ```
 
@@ -118,14 +125,14 @@ The next step is to get our session set up. Boto will use the `default` profile
 unless the user passed in a `--profile` parameter.
 
 ```python
-# Set up AWS Client + Resources + Waiters
+""" Set up AWS Session + Client + Resources + Waiters """
 if args.profile:
-  # Create custom session
-  print('Using Profile {}'.format(args.profile))
-  session = boto3.session.Session(profile_name=args.profile)
+    # Create custom session
+    print('Using profile {}'.format(args.profile))
+    session = boto3.session.Session(profile_name=args.profile)
 else:
-  # Use default session
-  session = boto3.session.Session()
+    # Use default session
+    session = boto3.session.Session()
 ```
 
 Two key features of Boto3 are high-level object-oriented resources and low-level
@@ -140,6 +147,10 @@ We get these waiters from the low-level client.
 ```python
 client = session.client('ec2')
 ec2 = session.resource('ec2')
+
+waiter_instance_exists = client.get_waiter('instance_exists')
+waiter_instance_stopped = client.get_waiter('instance_stopped')
+waiter_instance_running = client.get_waiter('instance_running')
 waiter_snapshot_complete = client.get_waiter('snapshot_completed')
 waiter_volume_available = client.get_waiter('volume_available')
 ```
@@ -158,14 +169,21 @@ we received can be used to retrieve an instance. If its not, we will exit the
 script.
 
 ```python
-# Get Instance
+""" Check instance exists """
 instance_id = args.instance
-print('---Instance {}'.format(instance_id))
+print('---Checking instance ({})'.format(instance_id))
 instance = ec2.Instance(instance_id)
 
-if not instance:
-    print('No instance found with ID {}'.format(instance_id))
-    sys.exit()
+# Set the max_attempts for this waiter (default 40)
+waiter_instance_exists.config.max_attempts = 5
+try:
+    waiter_instance_exists.wait(
+        InstanceIds=[
+            instance_id,
+        ]
+    )
+except botocore.exceptions.WaiterError as e:
+    sys.exit('ERROR: {}'.format(e))
 ```
 
 ### Steps
@@ -173,7 +191,36 @@ if not instance:
 We have an instance and the resources we need, let's continue the script and
 encrypt the volume.
 
+#### Check for existing encryption
+
+You can access the volumes of the instances. These return a Boto3 'Collection'
+which is an iterable of resources. We can iterate through it to get access to
+the actual instance of the volume. Note, if the volume is encrypted,
+we will exit our script.
+
+```python
+""" Get volume and exit if already encrypted """
+volumes = [v for v in instance.volumes.all()]
+if volumes:
+    original_root_volume = volumes[0]
+    volume_encrypted = original_root_volume.encrypted
+    if volume_encrypted:
+        sys.exit(
+            '**Volume ({}) is already encrypted'
+            .format(original_root_volume.id))
+```
+
 #### 1. Shut down if running
+
+The instance volume has mappings that we will want to preserve for the encrypted volume. We are able to modify these. You can do this as needed with other mappings. For this example, we are storing the 'DeleteOnTermination' information, which we will use at the end of the script to make sure it's the same.
+
+```python
+""" Step 1: Prepare instance """
+print('---Preparing instance')
+# Save original mappings to persist to new volume
+original_mappings = {}
+original_mappings['DeleteOnTermination'] = instance.block_device_mappings[0]['Ebs']['DeleteOnTermination']
+```
 
 We won't be able to work with this instance how we want if its running. You can
 check the status of instance through its state property. The different
@@ -188,25 +235,43 @@ codes are:
 - 80 : stopped
 ```
 
+In this case we will exit if the state is pending, shutting-down, or terminated and stop the instance if it is running.
+
 ```python
+# Exit if instance is pending, shutting-down, or terminated
+instance_exit_states = [0, 32, 48]
+if instance.state['Code'] in instance_exit_states:
+    sys.exit(
+        'ERROR: Instance is {} please make sure this instance is active.'
+        .format(instance.state['Name'])
+    )
+
+# Validate successful shutdown if it is running or stopping
 if instance.state['Code'] is 16:
     instance.stop()
 ```
 
-#### 2. Take snapshot
+Now that the signal to stop the instance is sent, we want to wait for the instance to be in its proper state. We can use a waiter, which polls the state of the instance at intervals, to block the code until the instance is stopped.
 
-You can access the volumes of the instances. These return a Boto3 'Collection'
-which is an iterable of resources. We can iterate through it to get access to
-the actual instance of the volume. Note, if the volume is encrypted,
-we will exit our script.
+```python    
+try:
+    waiter_instance_stopped.wait(
+        InstanceIds=[
+            instance_id,
+        ]
+    )
+except botocore.exceptions.WaiterError as e:
+    sys.exit('ERROR: {}'.format(e))
+```
+
+Waiters can be configured to behave as you need, for example, the waiter will poll 40 times to check the state. If it still has not reached the desired state the waiter is looking for it will exit with a 'WaiterError'. You can change this through '.config'.
 
 ```python
-for v in instance.volumes.all():
-    volume_id = v.id
-    if v.encrypted:
-        print('**Volume already is encrypted')
-        sys.exit()
+# Set the max_attempts for this waiter (default 40)
+waiter_instance_stopped.config.max_attempts = 5
 ```
+
+#### 2. Take snapshot
 
 Now that we have the id for the volume we will use that to create a snapshot
 of its current state. Immediately after we will use the waiter we stored earlier
@@ -214,17 +279,23 @@ to wait for the snapshot to be complete. You can pass multiple ids into the
 waiter. In this case, we will just wait for the one we created to be complete.
 
 ```python
-print('---Create snapshot of volume {}'.format(volume_id))
-snapshot = ec2.create_snapshot(
-    VolumeId=volume_id,
-    Description='Snapshot of {}'.format(volume_id),
-)
+""" Step 2: Take snapshot of volume """
+  print('---Create snapshot of volume ({})'.format(original_root_volume.id))
+  snapshot = ec2.create_snapshot(
+      VolumeId=original_root_volume.id,
+      Description='Snapshot of volume ({})'.format(original_root_volume.id),
+  )
 
-waiter_snapshot_complete.wait(
-    SnapshotIds=[
-        snapshot.id,
-    ]
-)
+  try:
+      waiter_snapshot_complete.wait(
+          SnapshotIds=[
+              snapshot.id,
+          ]
+      )
+  except botocore.exceptions.WaiterError as e:
+      # Clean up the snapshot to reduce clutter (optional)
+      snapshot.delete()
+      sys.exit('ERROR: {}'.format(e))
 ```
 
 #### 3. Create new encrypted volume
@@ -238,37 +309,47 @@ once the snapshot begins to be copied, we will wait for the snapshot to be
 complete before proceeding.
 
 ```python
-print('---Create Encrypted Snapshot Copy')
-if customer_master_key:
-    # Use custom key
-    snapshot_encrypted = snapshot.copy(
-        SourceRegion=session.region_name,
-        Description='Encrypted Copied Snapshot of {}'.format(snapshot.id),
-        KmsKeyId=customer_master_key,
-        Encrypted=True,
-    )
-else:
-    # Use default key
-    snapshot_encrypted = snapshot.copy(
-        SourceRegion=session.region_name,
-        Description='Encrypted Copied Snapshot of {}'.format(snapshot.id),
-        Encrypted=True,
-    )
+""" Step 3: Create encrypted volume """
+  print('---Create encrypted copy of snapshot')
+  if customer_master_key:
+      # Use custom key
+      snapshot_encrypted_dict = snapshot.copy(
+          SourceRegion=session.region_name,
+          Description='Encrypted copy of snapshot #{}'
+                      .format(snapshot.id),
+          KmsKeyId=customer_master_key,
+          Encrypted=True,
+      )
+  else:
+      # Use default key
+      snapshot_encrypted_dict = snapshot.copy(
+          SourceRegion=session.region_name,
+          Description='Encrypted copy of snapshot ({})'
+                      .format(snapshot.id),
+          Encrypted=True,
+      )
 
-waiter_snapshot_complete.wait(
-    SnapshotIds=[
-        snapshot_encrypted['SnapshotId'],
-    ],
-)
+  snapshot_encrypted = ec2.Snapshot(snapshot_encrypted_dict['SnapshotId'])
+
+  try:
+      waiter_snapshot_complete.wait(
+          SnapshotIds=[
+              snapshot_encrypted.id,
+          ],
+      )
+  except botocore.exceptions.WaiterError as e:
+      snapshot.delete()
+      snapshot_encrypted.delete()
+      sys.exit('ERROR: {}'.format(e))
 ```
 
 The snapshot is complete so we can now take that and create an encrypted volume.
 Because the snapshot is encrypted, the volume will be too.
 
 ```python
-print('---Create Encrypted Volume from snapshot')
+print('---Create encrypted volume from snapshot')
 volume_encrypted = ec2.create_volume(
-    SnapshotId=snapshot_encrypted['SnapshotId'],
+    SnapshotId=snapshot_encrypted.id,
     AvailabilityZone=instance.placement['AvailabilityZone']
 )
 ```
@@ -278,9 +359,10 @@ volume_encrypted = ec2.create_volume(
 Before we can attach the new encrypted volume we need to detach the old volume.
 
 ```python
-print('---Deatch Volume {}'.format(volume_id))
+""" Step 4: Detach current root volume """
+print('---Deatch volume {}'.format(original_root_volume.id))
 instance.detach_volume(
-    VolumeId=volume_id,
+    VolumeId=original_root_volume.id,
     Device=instance.root_device_name,
 )
 ```
@@ -292,36 +374,74 @@ volume id and the keep the device type constant by pulling it from the original
 instances property.
 
 ```python
-print('---Attach Volume {}'.format(volume_encrypted.id))
-waiter_volume_available.wait(
-    VolumeIds=[
-        volume_encrypted.id,
-    ],
-)
+""" Step 5: Attach current root volume """
+  print('---Attach volume {}'.format(volume_encrypted.id))
+  waiter_volume_available.config.max_attempts = 1
+  try:
+      waiter_volume_available.wait(
+          VolumeIds=[
+              volume_encrypted.id,
+          ],
+      )
+  except botocore.exceptions.WaiterError as e:
+      snapshot.delete()
+      snapshot_encrypted.delete()
+      volume_encrypted.delete()
+      sys.exit('ERROR: {}'.format(e))
 
-instance.attach_volume(
-    VolumeId=volume_encrypted.id,
-    Device=instance.root_device_name
-)
+  instance.attach_volume(
+      VolumeId=volume_encrypted.id,
+      Device=instance.root_device_name
+  )
 ```
 
 #### 6. Restart instance
 
-The volume is attached so we want to bring our instance back up.
+The volume is attached so we want to bring our instance back up. We will make sure the original mappings remain. We can access those through the 'modify_attribute' and selecting the root device we just created.
 
 ```python
-print('---Restart Instance')
-if instance.state['Code'] is 80 or instance.state['Code'] is 64:
-    instance.start()
+""" Step 6: Restart instance """
+# Modify instance attributes
+instance.modify_attribute(
+    BlockDeviceMappings=[
+        {
+            'DeviceName': instance.root_device_name,
+            'Ebs': {
+                'DeleteOnTermination':
+                original_mappings['DeleteOnTermination'],
+            },
+        },
+    ],
+)
+```
+We will start the instance and then wait for it to be running.
+
+```python
+print('---Restart instance')
+instance.start()
+
+try:
+    waiter_instance_running.wait(
+        InstanceIds=[
+            instance_id,
+        ]
+    )
+except botocore.exceptions.WaiterError as e:
+    sys.exit('ERROR: {}'.format(e))
 ```
 
 #### Clean up
 
 We no longer need the snapshot because we have extracted our volume already.
-You can do clean up as needed.
+You can do clean up as needed. We can also delete the snapshot_encrypted resource and the original root volume, we don't want that hanging around unencrypted.
 
 ```python
+""" Step 7: Clean up """
+print('---Clean up resources')
+# Delete snapshots and original volume
 snapshot.delete()
+snapshot_encrypted.delete()
+original_root_volume.delete()
 ```
 
 ## Summary

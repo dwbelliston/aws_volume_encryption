@@ -107,7 +107,7 @@ def main(argv):
     print('---Create snapshot of volume ({})'.format(original_root_volume.id))
     snapshot = ec2.create_snapshot(
         VolumeId=original_root_volume.id,
-        Description='Snapshot of volume {}'.format(original_root_volume.id),
+        Description='Snapshot of volume ({})'.format(original_root_volume.id),
     )
 
     try:
@@ -121,7 +121,7 @@ def main(argv):
         sys.exit('ERROR: {}'.format(e))
 
     """ Step 3: Create encrypted volume """
-    print('---Create encrypted snapshot copy')
+    print('---Create encrypted copy of snapshot')
     if customer_master_key:
         # Use custom key
         snapshot_encrypted_dict = snapshot.copy(
@@ -135,7 +135,7 @@ def main(argv):
         # Use default key
         snapshot_encrypted_dict = snapshot.copy(
             SourceRegion=session.region_name,
-            Description='Encrypted copy of snapshot #{}'
+            Description='Encrypted copy of snapshot ({})'
                         .format(snapshot.id),
             Encrypted=True,
         )
@@ -168,7 +168,7 @@ def main(argv):
 
     """ Step 5: Attach current root volume """
     print('---Attach volume {}'.format(volume_encrypted.id))
-
+    waiter_volume_available.config.max_attempts = 1
     try:
         waiter_volume_available.wait(
             VolumeIds=[
@@ -202,8 +202,6 @@ def main(argv):
     print('---Restart instance')
     instance.start()
 
-    # Set the max_attempts for this waiter (default 40)
-    waiter_instance_running.config.max_attempts = 40
     try:
         waiter_instance_running.wait(
             InstanceIds=[
