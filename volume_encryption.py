@@ -68,7 +68,7 @@ def main(argv):
     """ Get volume and exit if already encrypted """
     volumes = [v for v in instance.volumes.all()]
     if volumes:
-        original_root_volume = ec2.Volume(volumes[0].id)
+        original_root_volume = volumes[0]
         volume_encrypted = original_root_volume.encrypted
         if volume_encrypted:
             sys.exit(
