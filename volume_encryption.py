@@ -54,8 +54,6 @@ def main(argv):
     print('---Checking instance ({})'.format(instance_id))
     instance = ec2.Instance(instance_id)
 
-    # Set the max_attempts for this waiter (default 40)
-    waiter_instance_exists.config.max_attempts = 5
     try:
         waiter_instance_exists.wait(
             InstanceIds=[
@@ -92,8 +90,10 @@ def main(argv):
     # Validate successful shutdown if it is running or stopping
     if instance.state['Code'] is 16:
         instance.stop()
+
     # Set the max_attempts for this waiter (default 40)
-    waiter_instance_stopped.config.max_attempts = 5
+    waiter_instance_stopped.config.max_attempts = 40
+
     try:
         waiter_instance_stopped.wait(
             InstanceIds=[
@@ -168,7 +168,6 @@ def main(argv):
 
     """ Step 5: Attach current root volume """
     print('---Attach volume {}'.format(volume_encrypted.id))
-    waiter_volume_available.config.max_attempts = 1
     try:
         waiter_volume_available.wait(
             VolumeIds=[

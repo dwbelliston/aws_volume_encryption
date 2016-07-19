@@ -174,8 +174,6 @@ instance_id = args.instance
 print('---Checking instance ({})'.format(instance_id))
 instance = ec2.Instance(instance_id)
 
-# Set the max_attempts for this waiter (default 40)
-waiter_instance_exists.config.max_attempts = 5
 try:
     waiter_instance_exists.wait(
         InstanceIds=[
@@ -268,7 +266,7 @@ Waiters can be configured to behave as you need, for example, the waiter will po
 
 ```python
 # Set the max_attempts for this waiter (default 40)
-waiter_instance_stopped.config.max_attempts = 5
+waiter_instance_stopped.config.max_attempts = 40
 ```
 
 #### 2. Take snapshot
@@ -376,7 +374,6 @@ instances property.
 ```python
 """ Step 5: Attach current root volume """
   print('---Attach volume {}'.format(volume_encrypted.id))
-  waiter_volume_available.config.max_attempts = 1
   try:
       waiter_volume_available.wait(
           VolumeIds=[
