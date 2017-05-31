@@ -182,14 +182,14 @@ def main(argv):
             AvailabilityZone=instance.placement['AvailabilityZone']
         )
     
-        """ Step 4: Detach current root volume """
+        """ Step 4: Detach current volume """
         print('---Detach volume {}'.format(volume.id))
         instance.detach_volume(
             VolumeId=volume.id,
             Device=current_volume_data['DeviceName']
         )
     
-        """ Step 5: Attach current root volume """
+        """ Step 5: Attach new encrypted volume """
         print('---Attach volume {}'.format(volume_encrypted.id))
         try:
             waiter_volume_available.wait(
@@ -213,7 +213,6 @@ def main(argv):
         volume_data.append(current_volume_data)                  
     
     for bdm in volume_data:
-        """ Step 6: Start instance """
         # Modify instance attributes
         instance.modify_attribute(
             BlockDeviceMappings=[
@@ -226,9 +225,9 @@ def main(argv):
                 },
             ],
         )
-        
-    instance.start()
+    """ Step 6: Start instance """
     print('---Start instance')
+    instance.start()
     try:
         waiter_instance_running.wait(
             InstanceIds=[
