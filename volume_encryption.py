@@ -26,6 +26,8 @@ def main(argv):
                         help='Customer master key', required=False)
     parser.add_argument('-p', '--profile',
                         help='Profile to use', required=False)
+    parser.add_argument('-r', '--region',
+                        help='Region of source volume', required=True)
     args = parser.parse_args()
 
     """ Set up AWS Session + Client + Resources + Waiters """
@@ -130,7 +132,7 @@ def main(argv):
             Description='Snapshot of volume ({})'.format(volume.id),
         )
         
-        waiter_snapshot_complete.config_max_attempts = 120
+        waiter_snapshot_complete.config.max_attempts = 240
     
         try:
             waiter_snapshot_complete.wait(
@@ -147,7 +149,7 @@ def main(argv):
         if customer_master_key:
             # Use custom key
             snapshot_encrypted_dict = snapshot.copy(
-                SourceRegion='us-east-1',
+                SourceRegion=args.region,
                 Description='Encrypted copy of snapshot #{}'
                             .format(snapshot.id),
                 KmsKeyId=customer_master_key,
@@ -156,7 +158,7 @@ def main(argv):
         else:
             # Use default key
             snapshot_encrypted_dict = snapshot.copy(
-                SourceRegion='us-east-1',
+                SourceRegion=args.region,
                 Description='Encrypted copy of snapshot ({})'
                             .format(snapshot.id),
                 Encrypted=True,
@@ -176,11 +178,20 @@ def main(argv):
             sys.exit('ERROR: {}'.format(e))
     
         print('---Create encrypted volume from snapshot')
-        volume_encrypted = ec2.create_volume(
-            SnapshotId=snapshot_encrypted.id,
-            VolumeType='gp2',
-            AvailabilityZone=instance.placement['AvailabilityZone']
-        )
+
+        if volume.volume_type == 'io1':
+            volume_encrypted = ec2.create_volume(
+                SnapshotId=snapshot_encrypted.id,
+                VolumeType=volume.volume_type,
+                Iops=volume.iops,
+                AvailabilityZone=instance.placement['AvailabilityZone']
+            )
+        else:
+            volume_encrypted = ec2.create_volume(
+                SnapshotId=snapshot_encrypted.id,
+                VolumeType=volume.volume_type,
+                AvailabilityZone=instance.placement['AvailabilityZone']
+            )
     
         """ Step 4: Detach current volume """
         print('---Detach volume {}'.format(volume.id))
