@@ -1,5 +1,9 @@
 # AWS EC2 Root Volume Encryption
 
+## _ReadMe Tutorial is for [v1.0](https://github.com/dwbelliston/aws_volume_encryption/releases/tag/1.0)_
+
+## _[v2.0](https://github.com/dwbelliston/aws_volume_encryption/releases/tag/2.0) includes support for mutli-volume encryption_
+
 Despite all the planning and preparing we do to architect flawless systems,
 we may eventually run into issues with our design. Changing business needs will
 mean you need to quickly reassess your design and find reliable solutions.
