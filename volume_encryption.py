@@ -192,6 +192,10 @@ def main(argv):
                 VolumeType=volume.volume_type,
                 AvailabilityZone=instance.placement['AvailabilityZone']
             )
+     
+        # Add original tags to new volume 
+        if volume.tags:
+            volume_encrypted.create_tags(Tags=volume.tags)
     
         """ Step 4: Detach current volume """
         print('---Detach volume {}'.format(volume.id))
