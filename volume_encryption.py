@@ -53,7 +53,7 @@ def main(argv):
 
     """ Check instance exists """
     instance_id = args.instance
-    print('---Checking instance ({})'.format(instance_id))
+    print('---Checking instance {}'.format(instance_id))
     instance = ec2.Instance(instance_id)
 
     try:
@@ -79,7 +79,6 @@ def main(argv):
   
     volume_data = []
     
-    print('---Preparing instance')    
     """ Get volume and exit if already encrypted """
     volumes = [v for v in instance.volumes.all()]
     for volume in volumes:
@@ -95,9 +94,10 @@ def main(argv):
                 }        
                  
         if volume_encrypted:
-            sys.exit(
-                '**Volume ({}) is already encrypted'
+            print(
+                '**Volume {} is already encrypted'
                 .format(volume.id))
+            continue
 
         """ Step 1: Prepare instance """
     
@@ -109,6 +109,7 @@ def main(argv):
                 .format(instance.state['Name'])
             )
     
+        print('---Stopping instance {}'.format(instance_id))
         # Validate successful shutdown if it is running or stopping
         if instance.state['Code'] is 16:
             instance.stop()
@@ -126,10 +127,10 @@ def main(argv):
             sys.exit('ERROR: {}'.format(e))
     
         """ Step 2: Take snapshot of volume """
-        print('---Create snapshot of volume ({})'.format(volume.id))
+        print('---Create snapshot of volume {}'.format(volume.id))
         snapshot = ec2.create_snapshot(
             VolumeId=volume.id,
-            Description='Snapshot of volume ({})'.format(volume.id),
+            Description='Snapshot of volume {}'.format(volume.id),
         )
         
         waiter_snapshot_complete.config.max_attempts = 240
@@ -145,7 +146,7 @@ def main(argv):
             sys.exit('ERROR: {}'.format(e))
     
         """ Step 3: Create encrypted volume """
-        print('---Create encrypted copy of snapshot')
+        print('---Create encrypted copy of snapshot {}'.format(snapshot.id))
         if customer_master_key:
             # Use custom key
             snapshot_encrypted_dict = snapshot.copy(
@@ -159,7 +160,7 @@ def main(argv):
             # Use default key
             snapshot_encrypted_dict = snapshot.copy(
                 SourceRegion=args.region,
-                Description='Encrypted copy of snapshot ({})'
+                Description='Encrypted copy of snapshot {}'
                             .format(snapshot.id),
                 Encrypted=True,
             )
@@ -177,7 +178,7 @@ def main(argv):
             snapshot_encrypted.delete()
             sys.exit('ERROR: {}'.format(e))
     
-        print('---Create encrypted volume from snapshot')
+        print('---Create encrypted volume from encrypted snapshot {}'.format(snapshot_encrypted.id))
 
         if volume.volume_type == 'io1':
             volume_encrypted = ec2.create_volume(
@@ -241,7 +242,7 @@ def main(argv):
             ],
         )
     """ Step 6: Start instance """
-    print('---Start instance')
+    print('---Starting instance {}'.format(instance_id))
     instance.start()
     try:
         waiter_instance_running.wait(
@@ -262,7 +263,7 @@ def main(argv):
         print('---Remove original volume {}'.format(cleanup['volume'].id))
         cleanup['volume'].delete()
     
-    print('Encryption finished')
+    print('Encryption finished.')
 
 if __name__ == "__main__":
     main(sys.argv[1:])
